@@ -1,0 +1,90 @@
+module spi_s_8 #(parameter divider = 16)(
+input clk,input rst,
+input [63:0] datas,
+input sclk,
+input mosi,
+input cs,
+output reg miso,
+output reg [63:0] dout,
+output reg b_t
+    );
+     reg [25:0]c;
+     reg [2:0]b_c;
+     reg [2:0]bi_c;
+     reg [1:0] s,n;
+    parameter idel=2'd0,rx=2'd1,d=2'd2;
+     always @(posedge clk) begin
+    if(rst) begin
+    c<=26'd0;
+    b_t<=1'd0;
+    end
+    else
+    if(c==(divider-1)) begin
+    c<=26'd0;
+    b_t<=1'd1;
+    end
+    else begin
+    c<=c+1'b1;
+    b_t<=1'b0;
+    end
+    end
+    always @(posedge clk) begin
+    if(rst)
+    b_c<=3'd0;
+    else 
+    if(s==idel)
+    b_c<=3'd0;
+    else
+    if(s==rx && b_t)
+    b_c<=b_c+1'b1;
+    end
+    always @(posedge clk) begin
+    if(rst)
+    bi_c<=3'd0;
+    else
+    if(s==idel)
+    bi_c<=3'd0;
+    else 
+    if(s==rx && b_t&&b_c==3'd7)
+    bi_c<=bi_c+1'b1;
+    end
+     always @(posedge clk) begin
+    if(rst)
+    s<=idel;
+    else
+    s<=n;
+    end
+     always @(*) begin
+     n=idel;
+     miso=1'b0;
+      case(s)
+      idel:begin
+      if(!cs)
+      n=rx;
+      else
+      n=idel;
+      end
+      rx:begin
+        miso=datas[(bi_c *8)+b_c];
+        if(b_t && b_c==3'd7&&bi_c==3'd7)
+      n=d;
+      else
+      n=rx;
+      end
+      d:begin
+      if(b_t)
+      n=idel;
+      else
+      n=d;
+      end
+      default:n=idel;
+      endcase
+      end
+       always @( posedge clk) begin
+      if(rst)
+      dout<=64'd0;
+      else
+      if(s==rx && b_t )
+      dout[(bi_c *8)+b_c]<=mosi;
+      end
+endmodule
