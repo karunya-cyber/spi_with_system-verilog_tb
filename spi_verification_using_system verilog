@@ -1,0 +1,208 @@
+interface spi_if(input logic clk);
+    logic rst;
+    logic st;
+    logic [63:0]data_m;
+        logic [63:0]data_s;
+        logic [63:0]dout_m;
+                logic [63:0]dout_s;
+    logic mosi;
+        logic miso;
+    logic cs;
+    logic sclk;
+    logic b_t;
+  logic slave_b_t;
+  
+  clocking cb @(posedge clk);
+    default input #1ns output #1ns;
+    output rst,st; 
+     output data_m,data_s;
+    input mosi,miso,sclk,cs,b_t;
+    input dout_m,dout_s;
+  endclocking
+  modport tb(clocking cb,output rst,output st,output data_m,output data_s);
+    
+    endinterface
+    class transaction;
+     rand bit[63:0] data_m;
+       rand bit[63:0] data_s;
+            bit cs;
+            bit b_t;
+      bit mosi;
+      bit miso;
+      bit sclk;
+      logic [63:0] dout_m;
+      logic [63:0] dout_s; 
+     constraint c1{
+       data_m inside{[64'h0000000000000001:64'hffffffffffffffff]};
+       data_s inside{[64'h0000000000000001:64'hffffffffffffffff]};
+      }
+    endclass
+    class generator;
+      transaction tr;
+      mailbox gtd;
+      function new(mailbox gtd);
+        this.gtd=gtd;
+      endfunction
+      task run();
+    repeat (16) begin
+        tr = new();
+
+        if (!tr.randomize())
+            $fatal(1, "Transaction randomization failed");
+
+        $display("Generated: master=%h slave=%h",
+                 tr.data_m, tr.data_s);
+
+        gtd.put(tr);
+    end
+endtask
+          endclass
+         class driver;
+  transaction tr;
+  mailbox gtd;
+  mailbox f;
+  virtual spi_if.tb vif;
+
+  function new(mailbox gtd, mailbox f, virtual spi_if.tb vif);
+    this.gtd = gtd;
+    this.f   = f;
+    this.vif = vif;
+  endfunction
+
+  task run();
+  $display("from driver");
+  forever begin
+    gtd.get(tr);
+
+    vif.cb.data_m <= tr.data_m;
+    vif.cb.data_s <= tr.data_s;
+
+    vif.cb.st <= 1'b1;
+
+    @(posedge vif.cb.cs);
+    repeat(2) @(vif.cb);
+
+    $display("TRANSFER DONE: master=%h slave=%h", tr.data_m, tr.data_s);
+    f.put(1);
+  end
+endtask
+endclass
+    class monitor;
+  transaction tr;
+  mailbox mts;
+  virtual spi_if.tb vif;
+
+  function new(mailbox mts, virtual spi_if.tb vif);
+    this.mts = mts;
+    this.vif = vif;
+  endfunction
+
+  task run();
+    $display("from monitor");
+    forever begin
+      @(posedge vif.cb.cs); 
+      repeat(2) @(vif.cb); 
+      tr = new();
+      tr.data_m = vif.data_m;
+      tr.data_s = vif.data_s;
+      tr.dout_m = vif.cb.dout_m;
+      tr.dout_s = vif.cb.dout_s;
+      mts.put(tr);
+    end
+  endtask
+endclass
+           class scoreboard;
+    transaction tr;
+    mailbox mts;
+
+    function new(mailbox mts);
+        this.mts = mts;
+    endfunction
+
+    task run();
+        $display("from scoreboard");
+
+        forever begin
+            mts.get(tr);
+
+            if (tr.dout_m === tr.data_s)
+                $display("PASS: master received %h", tr.dout_m);
+            else
+                $display("FAIL: master received %h, expected %h",
+                         tr.dout_m, tr.data_s);
+
+            if (tr.dout_s === tr.data_m)
+                $display("PASS: slave received %h", tr.dout_s);
+            else
+                $display("FAIL: slave received %h, expected %h",
+                         tr.dout_s, tr.data_m);
+        end
+    endtask
+endclass
+                                        
+                
+module spi_tb_8(
+  
+    );
+    logic clk=0;
+              always #5 clk=~clk;
+  spi_if intf(clk);
+  
+  spi_m_8 #(.divider(16)) dut1(
+      .clk(intf.clk),
+           .rst(intf.rst),
+           .st(intf.st),
+           .datam(intf.data_m),
+           .dout(intf.dout_m),
+           .mosi(intf.mosi),
+            .miso(intf.miso),
+            .cs(intf.cs),
+            .sclk(intf.sclk),
+            .b_t(intf.b_t)
+            );
+  spi_s_8 #(.divider(16)) dut2(
+           .clk(intf.clk),
+           .rst(intf.rst),
+           .datas(intf.data_s),
+           .dout(intf.dout_s),
+           .mosi(intf.mosi),
+           .miso(intf.miso),
+            .cs(intf.cs),
+              .sclk(intf.sclk),
+              .b_t(slave_b_t)
+            );
+  mailbox gtd=new();
+  mailbox mts=new();
+  mailbox f = new();
+  generator g= new(gtd);
+  driver d=new(gtd,f,intf);
+  monitor m=new(mts,intf);
+  scoreboard s=new(mts);
+           initial begin
+    int f_c;
+
+    intf.rst = 1'b1;
+    intf.st  = 1'b0;
+
+    #10;
+    intf.rst = 1'b0;
+    #10;
+
+    fork
+        g.run();
+        d.run();
+        m.run();
+        s.run();
+    join_none
+             repeat(16) begin
+    f.get(f_c);
+             end
+    #100;
+    $display("master tx = %h", intf.data_m);
+    $display("slave rx  = %h", intf.dout_s);
+    $display("slave tx  = %h", intf.data_s);
+    $display("master rx = %h", intf.dout_m);
+
+    $finish;
+end
+            endmodule
